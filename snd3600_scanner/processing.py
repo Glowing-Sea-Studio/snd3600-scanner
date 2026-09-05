@@ -1,12 +1,21 @@
 import cv2
 import numpy as np
 
-def auto_white_balance(rgb):
+def auto_white_balance(rgb, crop_norm=None):
     # Calculate min/max values on the center of the image to ignore film borders
     h, w = rgb.shape[:2]
-    crop_y1, crop_y2 = int(h * 0.15), int(h * 0.85)
-    crop_x1, crop_x2 = int(w * 0.15), int(w * 0.85)
-    center = rgb[crop_y1:crop_y2, crop_x1:crop_x2]
+    if crop_norm and crop_norm != [0.0, 0.0, 1.0, 1.0]:
+        px1, py1, px2, py2 = crop_norm
+        x1, y1 = max(0, int(px1 * w)), max(0, int(py1 * h))
+        x2, y2 = min(w, int(px2 * w)), min(h, int(py2 * h))
+        if x2 > x1 and y2 > y1:
+            center = rgb[y1:y2, x1:x2]
+        else:
+            center = rgb
+    else:
+        crop_y1, crop_y2 = int(h * 0.15), int(h * 0.85)
+        crop_x1, crop_x2 = int(w * 0.15), int(w * 0.85)
+        center = rgb[crop_y1:crop_y2, crop_x1:crop_x2]
 
     out = np.zeros_like(rgb)
     for i in range(3):
@@ -25,21 +34,12 @@ def auto_white_balance(rgb):
             out[:, :, i] = channel
     return out
 
-def apply_adjustments(frame, params):
+def apply_adjustments(frame, params, preview=False):
     """
-    Applies zoom, rotation, flip, color conversion, white balance, exposure, contrast, brightness.
+    Applies rotation, flip, crop, color conversion, white balance, exposure, contrast, brightness.
     Returns RGB image.
     """
     img = frame.copy()
-
-    z = params.get('zoom', 1.0)
-    if z > 1.0:
-        h, w = img.shape[:2]
-        new_h, new_w = int(h / z), int(w / z)
-        y1 = (h - new_h) // 2
-        x1 = (w - new_w) // 2
-        img = img[y1:y1+new_h, x1:x1+new_w]
-        img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
 
     rotation = params.get('rotation', 0)
     if rotation == 90:
@@ -54,6 +54,16 @@ def apply_adjustments(frame, params):
     if params.get('flip_v', False):
         img = cv2.flip(img, 0)
 
+    crop_norm = params.get('crop_norm', [0.0, 0.0, 1.0, 1.0])
+
+    if not preview and crop_norm != [0.0, 0.0, 1.0, 1.0]:
+        h, w = img.shape[:2]
+        px1, py1, px2, py2 = crop_norm
+        x1, y1 = max(0, int(px1 * w)), max(0, int(py1 * h))
+        x2, y2 = min(w, int(px2 * w)), min(h, int(py2 * h))
+        if x2 > x1 and y2 > y1:
+            img = img[y1:y2, x1:x2]
+
     # Inversion
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
 
@@ -66,7 +76,12 @@ def apply_adjustments(frame, params):
     rgb = 255.0 - rgb
 
     if params.get('auto_color', True):
-        rgb = auto_white_balance(rgb)
+        # We pass crop_norm so WB is calculated on the cropped area, even during preview.
+        # However, if preview is False, the image is already cropped, so crop_norm should technically be reset for WB.
+        if preview:
+            rgb = auto_white_balance(rgb, crop_norm)
+        else:
+            rgb = auto_white_balance(rgb, None) # already cropped
 
     # Temperature and Tint (White Balance)
     temp = params.get('temperature', 0.0) # -100 to 100
@@ -92,7 +107,9 @@ def apply_adjustments(frame, params):
 
     # Profile color adjustments
     if profile == 'B&W':
-        gray = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        # Need to clip before converting to uint8 to avoid wrap-around black artifacting for overexposed pixels
+        clp = np.clip(rgb, 0, 255).astype(np.uint8)
+        gray = cv2.cvtColor(clp, cv2.COLOR_RGB2GRAY)
         rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB).astype(np.float32)
     elif profile == 'Fuji Superia':
         # Slightly enhanced greens and reds
