@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=SND 3600 Scanner
+Comment=Numérisation de négatifs avec SilverCrest SND 3600 A2
+Exec=sh -c "$HOME/.local/bin/snd3600-scanner"
+Icon=camera-photo
+Terminal=false
+Type=Application
+Categories=Graphics;Photography;
